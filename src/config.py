@@ -47,7 +47,9 @@ class RAGConfig(BaseSettings):
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     # Retrieval Configuration
-    retrieval_strategy: Literal["dense_only", "bm25_only", "hybrid"] = "hybrid"
+    retrieval_strategy: Literal["dense_only", "bm25_only", "hybrid", "hybrid_rerank"] = (
+        "hybrid_rerank"
+    )
     dense_top_k: int = 10
     sparse_top_k: int = 10
     final_top_k: int = 5
@@ -56,6 +58,7 @@ class RAGConfig(BaseSettings):
     # Cross-Encoder Reranker
     reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     rerank_top_k: int = 20
+    candidate_top_k: int = 20
 
     # Generation & Refusal
     active_chunking_strategy: Literal["strategy_a", "strategy_b"] = "strategy_a"

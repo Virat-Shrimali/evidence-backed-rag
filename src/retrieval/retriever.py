@@ -1,4 +1,4 @@
-"""Independent retriever abstractions for dense, sparse, and hybrid search."""
+"""Independent retriever abstractions for dense, sparse, hybrid, and reranked search."""
 
 from abc import ABC, abstractmethod
 from typing import Literal
@@ -8,6 +8,7 @@ from src.index.bm25_index import BM25Index
 from src.index.embed import DenseIndex
 from src.retrieval.hybrid import hybrid_retrieve
 from src.retrieval.models import RetrievedChunk
+from src.retrieval.rerank import CrossEncoderReranker
 
 
 class BaseRetriever(ABC):
@@ -88,10 +89,40 @@ class HybridRetriever(BaseRetriever):
         )
 
 
+class RerankedRetriever(BaseRetriever):
+    """Two-stage retriever applying a neural cross-encoder reranker to any base retriever."""
+
+    def __init__(
+        self,
+        base_retriever: BaseRetriever,
+        reranker: CrossEncoderReranker | None = None,
+        candidate_top_k: int = 20,
+        final_top_k: int = 5,
+    ):
+        self.base_retriever = base_retriever
+        self.reranker = reranker or CrossEncoderReranker()
+        self.candidate_top_k = candidate_top_k
+        self.final_top_k = final_top_k
+
+    def retrieve(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+        k_final = top_k or self.final_top_k
+
+        # Stage 1: Fetch candidate pool from base retriever (BM25, Dense, or Hybrid)
+        candidates = self.base_retriever.retrieve(query, top_k=self.candidate_top_k)
+        if not candidates:
+            return []
+
+        # Stage 2: Cross-encoder reranks candidates down to final_top_k
+        return self.reranker.rerank(query=query, candidates=candidates, top_k=k_final)
+
+
 def create_retriever(
-    strategy: Literal["dense_only", "bm25_only", "hybrid"] | str | None = None,
+    strategy: Literal["dense_only", "bm25_only", "hybrid", "hybrid_rerank"]
+    | str
+    | None = None,
     dense_index: DenseIndex | None = None,
     bm25_index: BM25Index | None = None,
+    reranker: CrossEncoderReranker | None = None,
     config: RAGConfig | None = None,
 ) -> BaseRetriever:
     """Factory creating an independently callable retriever based on strategy configuration."""
@@ -118,6 +149,22 @@ def create_retriever(
             rrf_k=cfg.rrf_k,
             dense_top_k=cfg.dense_top_k,
             sparse_top_k=cfg.sparse_top_k,
+            final_top_k=cfg.final_top_k,
+        )
+    elif active_strategy in ("hybrid_rerank", "hybrid_reranker"):
+        hybrid_base = HybridRetriever(
+            dense_retriever=dense_retriever,
+            bm25_retriever=bm25_retriever,
+            rrf_k=cfg.rrf_k,
+            dense_top_k=cfg.dense_top_k,
+            sparse_top_k=cfg.sparse_top_k,
+            final_top_k=cfg.candidate_top_k,
+        )
+        return RerankedRetriever(
+            base_retriever=hybrid_base,
+            reranker=reranker
+            or CrossEncoderReranker(model_name=cfg.reranker_model_name),
+            candidate_top_k=cfg.candidate_top_k,
             final_top_k=cfg.final_top_k,
         )
     else:
