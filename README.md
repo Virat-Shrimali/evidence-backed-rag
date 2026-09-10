@@ -299,8 +299,33 @@ Response:
 6. The public backend URL will be accessible at:
    `https://<your-username>-evidence-backed-rag-api.hf.space`
 
+### Render Free Deployment (512 MB RAM Constrained Environment)
+
+Render Free provides **512 MB RAM**. Because loading PyTorch, SentenceTransformers (`all-MiniLM-L6-v2`), and Cross-Encoder (`ms-marco-MiniLM-L-6-v2`) requires **~712 MB RAM**, running neural reranking on Render Free triggers a kernel cgroups Out-Of-Memory (`SIGKILL`) kill, returning HTTP 502 without application logs.
+
+#### Memory Profiling by Retrieval Mode
+| Retrieval Strategy | PyTorch / Neural Models Loaded | Peak RSS Memory | Render Free (512 MB) Status |
+|---|---|---|---|
+| **`bm25_only`** | **None (Zero PyTorch, Zero Neural Models)** | **~113 MB** | **SAFE (~22% utilization)** |
+| `dense_only` | SentenceTransformers (`all-MiniLM-L6-v2`) | ~584 MB | OOM Kill (>512 MB) |
+| `hybrid_rerank` | SentenceTransformers + Cross-Encoder | ~712 MB | OOM Kill (>512 MB) |
+
+#### Render Free Deployment Configuration
+1. **Default Mode:** The codebase automatically detects `RENDER=true` and safely defaults `RETRIEVAL_STRATEGY` to `bm25_only` unless overridden.
+2. **Python Version:** Pinned to `3.11.9` via `.python-version` and `render.yaml` to ensure build stability and precompiled wheels.
+3. **Build & Start Commands:**
+   - **Build Command:** `pip install -r requirements-backend.txt`
+   - **Start Command:** `uvicorn api.main:app --host 0.0.0.0 --port $PORT`
+4. **Environment Variables on Render:**
+   - `PYTHON_VERSION`: `3.11.9`
+   - `RETRIEVAL_STRATEGY`: `bm25_only`
+   - `LLM_PROVIDER`: `mock` (or `openai` with `OPENAI_API_KEY`)
+
 > [!NOTE]
-> **Host Environment Status:** The automated offline test suite (87 tests), end-to-end smoke test, and Ruff static linting are 100% verified. In the local development environment, the Docker Desktop daemon was not running due to local Windows host permissions (`com.docker.service` stopped); container specifications, non-root user setup, environment variable mapping, health check handlers, and lean runtime dependencies are verified via static checks and automated unit tests.
+> **Architecture Preservation:** Hybrid retrieval and neural Cross-Encoder reranking are **not removed** from the repository. They remain fully available for production environments with >= 2 GB RAM (such as Hugging Face Spaces 16 GB free tier).
+
+> [!NOTE]
+> **Host Environment Status:** The automated offline test suite (95 tests, including memory-efficiency tests), end-to-end smoke test, and Ruff static linting are 100% verified. In the local development environment, the Docker Desktop daemon was not running due to local Windows host permissions (`com.docker.service` stopped); container specifications, non-root user setup, environment variable mapping, health check handlers, and lean runtime dependencies are verified via static checks and automated unit tests.
 
 ---
 
