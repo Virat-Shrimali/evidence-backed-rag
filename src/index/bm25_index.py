@@ -96,6 +96,10 @@ class BM25Index:
         """Return the number of chunks currently indexed."""
         return len(self._chunk_ids)
 
+    def __len__(self) -> int:
+        """Return the number of chunks currently indexed."""
+        return self.count()
+
     def clear(self) -> None:
         """Clear all indexed chunks."""
         self._chunks_map.clear()
