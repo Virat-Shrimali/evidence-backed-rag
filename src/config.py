@@ -66,6 +66,7 @@ class RAGConfig(BaseSettings):
     refusal_message: str = INSUFFICIENT_EVIDENCE_REFUSAL
 
     # LLM Settings
+    llm_provider: Literal["mock", "openai", "anthropic", "ollama"] = "mock"
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
     ollama_base_url: str = Field(default="http://localhost:11434", validation_alias="OLLAMA_BASE_URL")
