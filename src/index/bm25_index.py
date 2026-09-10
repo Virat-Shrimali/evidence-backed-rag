@@ -1,53 +1,104 @@
-"""Sparse indexing using Okapi BM25."""
+"""Sparse keyword retrieval using Okapi BM25 over the chunk corpus."""
 
+import re
+
+from rank_bm25 import BM25Okapi
 
 from src.ingest.chunk import Chunk
+from src.retrieval.models import RetrievedChunk
+
+
+def tokenize_for_bm25(text: str) -> list[str]:
+    """Tokenize text into lowercase alphanumeric keywords for BM25 matching."""
+    if not text:
+        return []
+    return [match.group(0).lower() for match in re.finditer(r"\b\w+\b", text)]
 
 
 class BM25Index:
-    """Sparse index wrapper around rank_bm25 or lightweight tokenized lookup."""
+    """Sparse index wrapper using Rank-BM25 with full chunk provenance."""
 
     def __init__(self, chunks: list[Chunk] | None = None):
-        self.chunks: dict[str, Chunk] = {}
-        self.corpus: list[list[str]] = []
-        self.chunk_ids: list[str] = []
-        self._bm25 = None
+        self._chunks_map: dict[str, Chunk] = {}
+        self._chunk_ids: list[str] = []
+        self._corpus: list[list[str]] = []
+        self._bm25: BM25Okapi | None = None
+
         if chunks:
             self.index_chunks(chunks)
 
-    def _tokenize(self, text: str) -> list[str]:
-        """Simple whitespace and lowercasing tokenizer."""
-        return [word.strip(".,!?;:()[]{}\"'").lower() for word in text.split() if word.strip()]
+    def index_chunks(self, chunks: list[Chunk]) -> int:
+        """Build BM25 index over the provided chunks.
 
-    def index_chunks(self, chunks: list[Chunk]) -> None:
-        """Build BM25 index over provided chunks."""
-        self.chunks = {c.id: c for c in chunks}
-        self.chunk_ids = [c.id for c in chunks]
-        self.corpus = [self._tokenize(c.content) for c in chunks]
-        try:
-            from rank_bm25 import BM25Okapi
-            self._bm25 = BM25Okapi(self.corpus)
-        except ImportError:
-            # Fallback simple keyword frequency scorer if rank_bm25 not yet installed
+        Handles duplicate IDs by keeping the latest chunk.
+        Returns the count of indexed chunks.
+        """
+        if not chunks:
+            self.clear()
+            return 0
+
+        # Deduplicate chunks while preserving order
+        unique_map: dict[str, Chunk] = {c.id: c for c in chunks}
+        self._chunks_map = unique_map
+        self._chunk_ids = list(unique_map.keys())
+
+        # Tokenize corpus for BM25
+        self._corpus = [tokenize_for_bm25(unique_map[cid].content) for cid in self._chunk_ids]
+
+        if self._corpus:
+            self._bm25 = BM25Okapi(self._corpus)
+        else:
             self._bm25 = None
 
-    def search(self, query: str, top_k: int = 5) -> list[str]:
-        """Return list of top_k chunk_ids matching query."""
-        if not self.chunk_ids:
+        return len(self._chunk_ids)
+
+    def search(self, query: str, top_k: int = 5) -> list[RetrievedChunk]:
+        """Query BM25 index and return ranked chunks with complete provenance."""
+        if not query.strip() or self._bm25 is None or not self._chunk_ids:
             return []
 
-        tokenized_query = self._tokenize(query)
-        if self._bm25 is not None:
-            doc_scores = self._bm25.get_scores(tokenized_query)
-            scored = list(zip(self.chunk_ids, doc_scores, strict=False))
-            scored.sort(key=lambda x: x[1], reverse=True)
-            return [chunk_id for chunk_id, score in scored[:top_k] if score > 0]
+        tokenized_query = tokenize_for_bm25(query)
+        if not tokenized_query:
+            return []
 
-        # Lightweight fallback token overlap scoring
-        q_tokens = set(tokenized_query)
-        scored = []
-        for chunk_id, tokens in zip(self.chunk_ids, self.corpus, strict=False):
-            score = len(q_tokens.intersection(tokens))
-            scored.append((chunk_id, score))
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return [chunk_id for chunk_id, score in scored[:top_k] if score > 0]
+        scores = self._bm25.get_scores(tokenized_query)
+        scored_pairs = [
+            (cid, float(score))
+            for cid, score in zip(self._chunk_ids, scores, strict=False)
+            if score > 0.0
+        ]
+
+        # Sort descending by BM25 score
+        scored_pairs.sort(key=lambda x: x[1], reverse=True)
+
+        k = max(1, top_k)
+        top_candidates = scored_pairs[:k]
+
+        results: list[RetrievedChunk] = []
+        for rank, (cid, score) in enumerate(top_candidates):
+            chunk = self._chunks_map[cid]
+            results.append(
+                RetrievedChunk(
+                    chunk_id=chunk.id,
+                    document_id=chunk.document_id,
+                    content=chunk.content,
+                    score=score,
+                    rank=rank + 1,
+                    retrieval_method="bm25",
+                    page_numbers=list(chunk.page_numbers),
+                    metadata=dict(chunk.metadata),
+                )
+            )
+
+        return results
+
+    def count(self) -> int:
+        """Return the number of chunks currently indexed."""
+        return len(self._chunk_ids)
+
+    def clear(self) -> None:
+        """Clear all indexed chunks."""
+        self._chunks_map.clear()
+        self._chunk_ids.clear()
+        self._corpus.clear()
+        self._bm25 = None
