@@ -1,13 +1,17 @@
-"""Streamlit production-ready demo UI for Evidence-Backed RAG."""
+"""Streamlit production-ready demo UI for Evidence-Backed RAG.
+
+Operates as a lightweight presentation layer connecting over HTTPS to the FastAPI backend.
+Zero neural models, PyTorch, or vector databases are loaded in this frontend layer.
+"""
 
 from __future__ import annotations
 
+import os
 import re
 
 import streamlit as st
 
-from src.config import settings
-from src.pipeline import RAGPipeline
+from app.api_client import BackendClientError, get_backend_url, query_backend
 
 STRATEGY_OPTIONS: dict[str, str] = {
     "Hybrid + Cross-Encoder (Tier S)": "hybrid_rerank",
@@ -18,9 +22,9 @@ STRATEGY_OPTIONS: dict[str, str] = {
 
 SAMPLE_QUESTIONS: list[str] = [
     "What is the core differentiator of the Evidence-Backed RAG system?",
-    "Which embedding models are recommended for local vector generation?",
+    "What embedding model does the project use?",
     "What chunk size and overlap parameters are suggested for baseline chunking?",
-    "What is the secret recipe for Martian hot chocolate?",  # Unanswerable refusal test
+    "How does PostgreSQL connection pooling work?",  # Unanswerable refusal test
 ]
 
 
@@ -57,10 +61,21 @@ def format_strategy_name(strategy_key: str) -> str:
     return strategy_key
 
 
-@st.cache_resource(show_spinner="Initializing Evidence-Backed RAG Pipeline...")
-def get_pipeline() -> RAGPipeline:
-    """Lazily initialize and cache the unified RAGPipeline instance."""
-    return RAGPipeline()
+def get_selectable_strategies(backend_url: str) -> dict[str, str]:
+    """Return strategy options permitted for the target backend.
+
+    When targeting the free Render backend (or when forced via environment variable),
+    restricts selection to BM25-only to prevent triggering OOM kills on the 512 MB backend.
+    Higher-memory backends (>= 2 GB RAM) expose the full multi-stage strategy suite.
+    """
+    is_render_free = (
+        "onrender.com" in backend_url
+        or os.environ.get("RENDER_FREE_MODE", "").lower() in ("true", "1", "yes")
+        or os.environ.get("LOW_MEMORY_MODE", "").lower() in ("true", "1", "yes")
+    )
+    if is_render_free:
+        return {"BM25-only (Okapi BM25) [Render Free Safe]": "bm25_only"}
+    return STRATEGY_OPTIONS
 
 
 def main() -> None:
@@ -70,6 +85,8 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
+
+    backend_url = get_backend_url()
 
     # Header
     st.title("📚 Evidence-Backed RAG")
@@ -85,13 +102,21 @@ def main() -> None:
     with st.sidebar:
         st.header("⚙️ Retrieval & Engine Settings")
 
+        available_strategies = get_selectable_strategies(backend_url)
         strategy_label = st.selectbox(
             "Retrieval Strategy",
-            options=list(STRATEGY_OPTIONS.keys()),
+            options=list(available_strategies.keys()),
             index=0,
             help="Select the retrieval and ranking architecture.",
         )
-        selected_strategy = STRATEGY_OPTIONS[strategy_label]
+        selected_strategy = available_strategies[strategy_label]
+
+        if len(available_strategies) == 1 and selected_strategy == "bm25_only":
+            st.info(
+                "🔒 **Render Free (512 MB RAM):** Operating in `bm25_only` mode to maintain low memory "
+                "footprint. Dense vector search and neural Cross-Encoder reranking are preserved in the "
+                "codebase for higher-memory environments (>= 2 GB RAM)."
+            )
 
         top_k = st.slider(
             "Top Evidence Chunks (k)",
@@ -103,9 +128,8 @@ def main() -> None:
 
         st.markdown("---")
         st.subheader("System Architecture")
-        st.markdown(f"**LLM Backend:** `{settings.llm_provider}`")
-        st.markdown(f"**Model:** `{settings.llm_model_name}`")
-        st.markdown(f"**Confidence Threshold:** `{settings.evidence_confidence_threshold}`")
+        st.markdown(f"**Backend API:** `{backend_url}`")
+        st.markdown(f"**Active Strategy:** `{selected_strategy}`")
 
         st.markdown("---")
         if st.button("Clear Conversation", use_container_width=True):
@@ -121,7 +145,7 @@ def main() -> None:
         question = st.text_input(
             "Enter your question:",
             value=default_q,
-            placeholder="e.g. What is the core differentiator of the Evidence-Backed RAG system?",
+            placeholder="e.g. What embedding model does the project use?",
             key="query_input",
         )
 
@@ -136,7 +160,7 @@ def main() -> None:
     for idx, sample_text in enumerate(SAMPLE_QUESTIONS):
         with sample_cols[idx]:
             is_refusal = idx == 3
-            btn_label = f"🚨 {sample_text[:28]}..." if is_refusal else f"💡 {sample_text[:28]}..."
+            btn_label = f"🚨 {sample_text[:24]}..." if is_refusal else f"💡 {sample_text[:24]}..."
             if st.button(btn_label, key=f"sample_{idx}", help=sample_text):
                 question = sample_text
                 st.session_state["user_question"] = sample_text
@@ -149,43 +173,49 @@ def main() -> None:
             st.warning("Please enter a non-empty question to query the document corpus.")
             return
 
-        pipeline = get_pipeline()
         try:
-            with st.spinner(f"Executing retrieval ({strategy_label}) and verifying evidence..."):
-                response, candidates = pipeline.query_with_candidates(
+            with st.spinner(f"Querying backend ({strategy_label}) and verifying evidence..."):
+                response_data = query_backend(
                     question=trimmed_question,
                     retriever_mode=selected_strategy,
                     top_k=top_k,
+                    backend_url=backend_url,
                 )
                 st.session_state["last_result"] = {
                     "question": trimmed_question,
-                    "response": response,
-                    "candidates": candidates,
+                    "response": response_data,
                     "strategy": selected_strategy,
                 }
-        except Exception as exc:
-            st.error(f"An error occurred while executing the query: {exc}")
+        except BackendClientError as exc:
+            st.error(exc.message)
+            return
+        except Exception:
+            st.error(
+                "An unexpected error occurred while communicating with the backend service. "
+                "Please check the service status and try again."
+            )
             return
 
     # Display Results
     if "last_result" in st.session_state:
         result_data = st.session_state["last_result"]
         resp = result_data["response"]
-        candidates = result_data["candidates"]
         active_strat = result_data["strategy"]
+        retrieved_chunk_ids = resp.get("retrieved_chunk_ids", [])
+        citations = resp.get("citations", [])
 
         st.markdown("---")
 
         # 1. Evidence Status & Confidence Bar
         col_status, col_conf = st.columns([1, 1])
         with col_status:
-            if resp.sufficient_evidence:
+            if resp.get("sufficient_evidence"):
                 st.success("✔ **Evidence Status:** Sufficient Evidence Grounded in Corpus")
             else:
                 st.warning("⚠ **Evidence Status:** Insufficient Evidence (Deterministic Refusal)")
 
         with col_conf:
-            conf_pct = int(resp.confidence * 100)
+            conf_pct = int(resp.get("confidence", 0.0) * 100)
             st.metric(
                 label="Grounding Confidence (Heuristic)",
                 value=f"{conf_pct}%",
@@ -194,58 +224,54 @@ def main() -> None:
 
         # 2. Answer Section
         st.subheader("Answer")
-        if resp.sufficient_evidence:
-            st.markdown(resp.answer)
+        if resp.get("sufficient_evidence"):
+            st.markdown(resp.get("answer", ""))
         else:
-            st.info(f"**{resp.answer}**")
+            st.info(f"**{resp.get('answer', '')}**")
             st.caption(
-                "The system could not find sufficient supporting evidence in the provided documents to ground an answer without risk of hallucination."
+                "The system could not find sufficient supporting evidence in the provided documents "
+                "to ground an answer without risk of hallucination."
             )
-            if resp.refusal_reason:
-                st.caption(f"Refusal Rationale: `{resp.refusal_reason}`")
+            if resp.get("refusal_reason"):
+                st.caption(f"Refusal Rationale: `{resp['refusal_reason']}`")
 
         # 3. Verifiable Citations Section
-        if resp.citations:
-            st.subheader(f"Verifiable Citations ({len(resp.citations)})")
-            candidate_map = {c.chunk_id: c for c in candidates}
-
-            for idx, cit in enumerate(resp.citations, 1):
-                prov = parse_chunk_provenance(cit.chunk_id)
-                cand = candidate_map.get(cit.chunk_id)
-                pages_str = (
-                    f"Page {cand.page_numbers}" if cand and cand.page_numbers
-                    else "Page 1"
-                )
+        if citations:
+            st.subheader(f"Verifiable Citations ({len(citations)})")
+            for idx, cit in enumerate(citations, 1):
+                cid = cit.get("chunk_id", "")
+                snippet = cit.get("text_snippet", "")
+                prov = parse_chunk_provenance(cid)
 
                 with st.container(border=True):
-                    col_cid, col_doc, col_pg = st.columns([3, 2, 1])
+                    col_cid, col_doc, col_idx = st.columns([3, 2, 1])
                     with col_cid:
-                        st.markdown(f"**Citation [{idx}]:** `{cit.chunk_id}`")
+                        st.markdown(f"**Source / Chunk [{idx}]:** `{cid}`")
                     with col_doc:
                         st.markdown(f"**Document:** `{prov['document_name']}`")
-                    with col_pg:
-                        st.markdown(f"**Location:** {pages_str}")
+                    with col_idx:
+                        st.markdown(f"**Index:** `{prov['chunk_index'] or 'c0000'}`")
 
-                    if cit.text_snippet:
+                    if snippet:
                         st.markdown(
-                            f"> *\"{cit.text_snippet}\"*",
+                            f"> *\"{snippet}\"*",
                             help="Verbatim quotation verified to occur in the cited chunk text.",
                         )
 
         # 4. Expandable Retrieval Details & Provenance
         with st.expander("🔍 Retrieval Details & Candidate Provenance"):
             st.markdown(f"**Active Strategy:** `{format_strategy_name(active_strat)}`")
-            st.markdown(f"**Total Candidates Retrieved:** `{len(candidates)}`")
+            st.markdown(f"**Total Candidates Retrieved:** `{len(retrieved_chunk_ids)}`")
 
-            if candidates:
-                for rank, chunk in enumerate(candidates, 1):
+            if retrieved_chunk_ids:
+                for rank, cid in enumerate(retrieved_chunk_ids, 1):
+                    prov = parse_chunk_provenance(cid)
                     with st.container(border=True):
                         st.markdown(
-                            f"**Rank {rank} · Chunk:** `{chunk.chunk_id}` | "
-                            f"**Initial Score:** `{chunk.score:.4f}`"
-                            + (f" | **Rerank Score:** `{chunk.rerank_score:.4f}`" if chunk.rerank_score is not None else "")
+                            f"**Rank {rank} · Chunk:** `{cid}` | "
+                            f"**Document:** `{prov['document_name']}` | "
+                            f"**Strategy:** `{prov['strategy']}`"
                         )
-                        st.text(chunk.content[:300] + ("..." if len(chunk.content) > 300 else ""))
 
 
 if __name__ == "__main__":

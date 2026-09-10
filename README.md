@@ -31,38 +31,39 @@ This system solves both problems by enforcing structured chunk-level citations (
 ## 2. Technical Architecture
 
 ```
-                     ┌─────────────────────┐
-                     │   Document Corpus   │
-                     │ (PDFs / Text Docs)  │
-                     └──────────┬──────────┘
-                                │
-                        1. Parse & Clean
-                                │
-                        2. Chunk (Strategy A / B)
-                                │
-                    ┌───────────┴────────────┐
-                    │                        │
-            3a. Dense Embeddings      3b. Sparse Index
-            (all-MiniLM-L6-v2)           (Rank-BM25)
-                    │                        │
-                    └───────────┬────────────┘
-                                │
-                      4. Hybrid Retriever
-                    (Reciprocal Rank Fusion)
-                                │
-                      5. Cross-Encoder Reranker
-                 (ms-marco-MiniLM-L-6-v2: Top-20 → Top-5)
-                                │
-                      6. Context-Enriched Prompt
-                   (Strict citation & grounding rules)
-                                │
-                      7. Evidence Sufficiency Check
-                      ┌─────────┴─────────┐
-                      │                   │
-                  [Sufficient]      [Insufficient]
-                      │                   │
-               Return Answer +     Return Exact Standard
-               Chunk Citations     Refusal Message
+┌──────────────────────────────────────────────┐
+│       Streamlit Demo UI (Frontend)          │
+│   (Presentation Layer · Zero Neural Models) │
+└──────────────────────┬───────────────────────┘
+                       │
+             HTTPS POST /query
+             [BACKEND_URL configured]
+                       │
+┌──────────────────────▼───────────────────────┐
+│           FastAPI Service (Backend)          │
+│        (Production REST API on Uvicorn)      │
+└──────────────────────┬───────────────────────┘
+                       │
+               RAG Pipeline Engine
+                       │
+       ┌───────────────┴───────────────┐
+       │                               │
+1. Parse & Ingest               2. Multi-Strategy Retrieval
+(Digital PDFs / Text)           ├── BM25 Sparse Keyword Search
+                                ├── Dense Semantic (all-MiniLM-L6-v2)
+                                ├── Hybrid Fusion (RRF k=60)
+                                └── Neural Reranker (ms-marco-MiniLM)
+                                               │
+                                3. Context-Enriched Prompt
+                                (Strict chunk citation constraints)
+                                               │
+                                4. Evidence Grounding & Refusal
+                                ┌──────────────┴──────────────┐
+                                │                             │
+                           [Sufficient]                 [Insufficient]
+                                │                             │
+                         Return Answer +            Deterministic Refusal:
+                         Verified Citations         "Insufficient evidence to answer..."
 ```
 
 ---
@@ -320,12 +321,67 @@ Render Free provides **512 MB RAM**. Because loading PyTorch, SentenceTransforme
    - `PYTHON_VERSION`: `3.11.9`
    - `RETRIEVAL_STRATEGY`: `bm25_only`
    - `LLM_PROVIDER`: `mock` (or `openai` with `OPENAI_API_KEY`)
+5. **Live Verified Backend URL:**
+   - **Health:** `https://evidence-backed-rag.onrender.com/health`
+   - **Query Endpoint:** `https://evidence-backed-rag.onrender.com/query`
+
+### Phase 2: Streamlit Frontend Deployment
+
+The Streamlit UI operates strictly as a presentation layer that communicates with the FastAPI backend over HTTPS. It contains zero neural model, PyTorch, or vector database dependencies, making it ultra-lightweight and fast to build.
+
+#### Frontend Architecture & Data Flow
+```
+User Query ──> Streamlit UI (Frontend)
+                     │
+         HTTPS POST {BACKEND_URL}/query
+                     │
+             FastAPI Backend (Render Free)
+                     │
+             BM25 Retrieval & Grounding
+                     │
+              RAGResponse (JSON)
+                     ▼
+         Render Evidence & Citations
+```
+
+#### Configuration
+The frontend resolves `BACKEND_URL` in the following priority order:
+1. `st.secrets["BACKEND_URL"]` (recommended for Streamlit Community Cloud)
+2. Environment variable `BACKEND_URL` (recommended for Render or container hosts)
+3. Fallback: `http://localhost:8000` (for local development)
+
+#### Deployment Option A: Streamlit Community Cloud (Recommended — 100% Free)
+1. Fork or push the repository to GitHub.
+2. Go to [share.streamlit.io](https://share.streamlit.io/) and create a **New app**.
+3. Configure:
+   - **Repository:** `your-username/evidence-backed-rag`
+   - **Branch:** `feat/frontend-deployment` (or `main`)
+   - **Main file path:** `app/streamlit_app.py`
+4. In **Advanced settings → Secrets**, add:
+   ```toml
+   BACKEND_URL = "https://evidence-backed-rag.onrender.com"
+   ```
+5. Click **Deploy**. Streamlit Cloud builds using `requirements.txt` (or `requirements-frontend.txt`) and provisions an HTTPS URL (e.g. `https://evidence-backed-rag.streamlit.app`).
+
+#### Deployment Option B: Render Web Service (Free Tier)
+1. On [Render Dashboard](https://dashboard.render.com/), create a new **Web Service**.
+2. Connect your GitHub repository and set:
+   - **Name:** `evidence-backed-rag-ui`
+   - **Runtime:** `Python`
+   - **Build Command:** `pip install -r requirements-frontend.txt`
+   - **Start Command:** `streamlit run app/streamlit_app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true`
+3. Add Environment Variable:
+   - `BACKEND_URL`: `https://evidence-backed-rag.onrender.com`
+   - `PYTHON_VERSION`: `3.11.9`
+
+> [!NOTE]
+> **Free Tier Memory Isolation & Strategy Selector:** The live Render Free backend runs in `bm25_only` mode due to Render Free's 512 MB RAM limit. When the frontend targets `*.onrender.com`, the UI automatically adapts the strategy selector to `BM25-only (Okapi BM25) [Render Free Safe]` to prevent accidental OOM kills on the backend. When pointing to local or higher-memory backends (>= 2 GB RAM), all 4 strategies (Dense, BM25, Hybrid RRF, Cross-Encoder) are fully selectable.
 
 > [!NOTE]
 > **Architecture Preservation:** Hybrid retrieval and neural Cross-Encoder reranking are **not removed** from the repository. They remain fully available for production environments with >= 2 GB RAM (such as Hugging Face Spaces 16 GB free tier).
 
 > [!NOTE]
-> **Host Environment Status:** The automated offline test suite (95 tests, including memory-efficiency tests), end-to-end smoke test, and Ruff static linting are 100% verified. In the local development environment, the Docker Desktop daemon was not running due to local Windows host permissions (`com.docker.service` stopped); container specifications, non-root user setup, environment variable mapping, health check handlers, and lean runtime dependencies are verified via static checks and automated unit tests.
+> **Host Environment Status:** The automated offline test suite (115 tests, including frontend, API client, and memory-efficiency tests), end-to-end smoke test, and Ruff static linting are 100% verified. In the local development environment, the Docker Desktop daemon was not running due to local Windows host permissions (`com.docker.service` stopped); container specifications, non-root user setup, environment variable mapping, health check handlers, and lean runtime dependencies are verified via static checks and automated unit tests.
 
 ---
 
