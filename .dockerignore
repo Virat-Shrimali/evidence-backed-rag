@@ -1,0 +1,31 @@
+# Git repository
+.git
+.gitignore
+.github
+
+# Python bytecode and virtual environments
+__pycache__/
+*.py[cod]
+*.class
+.venv/
+venv/
+env/
+
+# Testing and caching
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+tests/
+
+# Local vector databases and large runtime data
+chroma_db/
+evaluation/results/
+data/processed/*
+!data/processed/.gitkeep
+*.log
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example

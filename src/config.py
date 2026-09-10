@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -66,17 +66,44 @@ class RAGConfig(BaseSettings):
     refusal_message: str = INSUFFICIENT_EVIDENCE_REFUSAL
 
     # LLM Settings
-    llm_provider: Literal["mock", "openai", "anthropic", "ollama"] = "mock"
-    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
-    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
-    ollama_base_url: str = Field(default="http://localhost:11434", validation_alias="OLLAMA_BASE_URL")
-    llm_model_name: str = "gpt-4o-mini"
-    llm_temperature: float = 0.0
+    llm_provider: Literal["mock", "openai", "anthropic", "ollama"] = Field(
+        default="mock",
+        validation_alias=AliasChoices("LLM_PROVIDER", "llm_provider"),
+    )
+    openai_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENAI_API_KEY", "openai_api_key"),
+    )
+    anthropic_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ANTHROPIC_API_KEY", "anthropic_api_key"),
+    )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434",
+        validation_alias=AliasChoices("OLLAMA_BASE_URL", "ollama_base_url"),
+    )
+    llm_model_name: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("LLM_MODEL_NAME", "llm_model_name"),
+    )
+    llm_temperature: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices("LLM_TEMPERATURE", "llm_temperature"),
+    )
 
     # API & Serving
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    streamlit_port: int = 8501
+    api_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices("API_HOST", "api_host"),
+    )
+    api_port: int = Field(
+        default=8000,
+        validation_alias=AliasChoices("PORT", "API_PORT", "api_port"),
+    )
+    streamlit_port: int = Field(
+        default=8501,
+        validation_alias=AliasChoices("STREAMLIT_PORT", "streamlit_port"),
+    )
 
     chunking: ChunkingConfig = ChunkingConfig()
 
