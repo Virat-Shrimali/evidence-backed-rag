@@ -24,6 +24,18 @@ class RAGPipeline:
         self.config = config or settings
         self.retriever = retriever
         self.generator = generator or EvidenceGroundedGenerator(config=self.config)
+        self._retrievers_by_mode: dict[str, BaseRetriever] = {}
+
+    def get_retriever(self, retriever_mode: str | None = None) -> BaseRetriever:
+        """Get or lazily create and cache retriever for the specified strategy."""
+        if self.retriever is not None:
+            return self.retriever
+        active_mode = retriever_mode or self.config.retrieval_strategy
+        if active_mode not in self._retrievers_by_mode:
+            self._retrievers_by_mode[active_mode] = create_retriever(
+                strategy=active_mode, config=self.config
+            )
+        return self._retrievers_by_mode[active_mode]
 
     def query(
         self,
@@ -53,11 +65,7 @@ class RAGPipeline:
         top_k: int | None = None,
     ) -> tuple[RAGResponse, list[RetrievedChunk]]:
         """Execute RAG query and return both structured response and ranked candidate chunks."""
-        active_mode = retriever_mode or self.config.retrieval_strategy
-        if self.retriever is not None:
-            retriever = self.retriever
-        else:
-            retriever = create_retriever(strategy=active_mode, config=self.config)
+        retriever = self.get_retriever(retriever_mode)
 
         # 1. Retrieve ranked candidates
         candidates = retriever.retrieve(question, top_k=top_k)

@@ -90,6 +90,12 @@ def query_rag(
     pipeline: Annotated[RAGPipeline, Depends(get_pipeline)],
 ) -> RAGResponse:
     """Execute evidence-backed RAG query with strict citation grounding and refusal."""
+    logger.info(
+        "Received query request: '%s' (retriever_mode=%s, top_k=%s)",
+        request.question,
+        request.retriever_mode,
+        request.top_k,
+    )
     try:
         return pipeline.query(
             question=request.question,

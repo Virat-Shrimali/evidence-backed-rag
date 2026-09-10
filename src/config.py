@@ -1,5 +1,6 @@
 """Centralized configuration management for the Evidence-Backed RAG System."""
 
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -48,7 +49,15 @@ class RAGConfig(BaseSettings):
 
     # Retrieval Configuration
     retrieval_strategy: Literal["dense_only", "bm25_only", "hybrid", "hybrid_rerank"] = (
-        "hybrid_rerank"
+        Field(
+            default_factory=lambda: (
+                "bm25_only"
+                if os.environ.get("RENDER")
+                or os.environ.get("LOW_MEMORY_MODE", "").lower() in ("true", "1", "yes")
+                else "hybrid_rerank"
+            ),
+            validation_alias=AliasChoices("RETRIEVAL_STRATEGY", "retrieval_strategy"),
+        )
     )
     dense_top_k: int = 10
     sparse_top_k: int = 10

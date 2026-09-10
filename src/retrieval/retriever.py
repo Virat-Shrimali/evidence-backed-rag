@@ -120,6 +120,100 @@ class RerankedRetriever(BaseRetriever):
         return self.reranker.rerank(query=query, candidates=candidates, top_k=k_final)
 
 
+# Module-level singletons for index, model, and chunk caching
+_shared_bm25_index: BM25Index | None = None
+_shared_dense_index: DenseIndex | None = None
+_shared_reranker: CrossEncoderReranker | None = None
+_shared_corpus_chunks: list[Any] | None = None
+
+
+def clear_retriever_cache() -> None:
+    """Reset all module-level retriever and index singletons."""
+    global _shared_bm25_index, _shared_dense_index, _shared_reranker, _shared_corpus_chunks
+    _shared_bm25_index = None
+    _shared_dense_index = None
+    _shared_reranker = None
+    _shared_corpus_chunks = None
+
+
+def _get_corpus_chunks(cfg: RAGConfig) -> list[Any]:
+    """Lazily parse and chunk corpus documents once."""
+    global _shared_corpus_chunks
+    if _shared_corpus_chunks is not None:
+        return _shared_corpus_chunks
+
+    chunks: list[Any] = []
+    if cfg.raw_data_dir.exists():
+        from src.ingest.chunk import chunk_document
+        from src.ingest.parse import parse_directory
+
+        docs = parse_directory(cfg.raw_data_dir)
+        for doc in docs:
+            chunks.extend(chunk_document(doc, strategy=cfg.active_chunking_strategy))
+    _shared_corpus_chunks = chunks
+    return _shared_corpus_chunks
+
+
+def _get_bm25_index(
+    bm25_index: Any | None, cfg: RAGConfig, auto_index: bool = True
+) -> BM25Index:
+    """Resolve or lazily initialize shared BM25Index without loading dense/reranker models."""
+    if bm25_index is not None:
+        return bm25_index
+
+    global _shared_bm25_index
+    if _shared_bm25_index is None:
+        from src.index.bm25_index import BM25Index
+
+        _shared_bm25_index = BM25Index()
+
+    if auto_index and _shared_bm25_index.count() == 0 and cfg.raw_data_dir.exists():
+        chunks = _get_corpus_chunks(cfg)
+        if chunks:
+            _shared_bm25_index.index_chunks(chunks)
+
+    return _shared_bm25_index
+
+
+def _get_dense_index(
+    dense_index: Any | None, cfg: RAGConfig, auto_index: bool = True
+) -> DenseIndex:
+    """Resolve or lazily initialize shared DenseIndex without loading BM25 or reranker models."""
+    if dense_index is not None:
+        return dense_index
+
+    global _shared_dense_index
+    if _shared_dense_index is None:
+        from src.index.embed import DenseIndex
+
+        _shared_dense_index = DenseIndex(
+            persist_dir=cfg.chroma_persist_dir,
+            model_name=cfg.embedding_model_name,
+        )
+
+    if auto_index and cfg.raw_data_dir.exists():
+        col = _shared_dense_index.get_collection(collection_name="rag_chunks")
+        if col.count() == 0:
+            chunks = _get_corpus_chunks(cfg)
+            if chunks:
+                _shared_dense_index.index_chunks(chunks)
+
+    return _shared_dense_index
+
+
+def _get_reranker(
+    reranker: CrossEncoderReranker | None, cfg: RAGConfig
+) -> CrossEncoderReranker:
+    """Resolve or lazily initialize shared CrossEncoderReranker."""
+    if reranker is not None:
+        return reranker
+
+    global _shared_reranker
+    if _shared_reranker is None:
+        _shared_reranker = CrossEncoderReranker(model_name=cfg.reranker_model_name)
+    return _shared_reranker
+
+
 def create_retriever(
     strategy: Literal["dense_only", "bm25_only", "hybrid", "hybrid_rerank"]
     | str
@@ -129,51 +223,30 @@ def create_retriever(
     reranker: CrossEncoderReranker | None = None,
     config: RAGConfig | None = None,
 ) -> BaseRetriever:
-    """Factory creating an independently callable retriever based on strategy configuration."""
+    """Factory creating an independently callable retriever based on strategy configuration.
+
+    Only initializes the models and indexes required for the selected strategy:
+    - 'bm25_only': Only loads BM25Index. Zero PyTorch, zero SentenceTransformers, zero CrossEncoder.
+    - 'dense_only': Only loads DenseIndex and embedding model.
+    - 'hybrid': Loads BM25Index and DenseIndex.
+    - 'hybrid_rerank': Loads BM25Index, DenseIndex, and CrossEncoderReranker.
+    """
     cfg = config or settings
     active_strategy = strategy or cfg.retrieval_strategy
 
-    if dense_index is None:
-        from src.index.embed import DenseIndex
+    if active_strategy == "bm25_only":
+        b_index = _get_bm25_index(bm25_index, cfg)
+        return BM25Retriever(bm25_index=b_index, top_k=cfg.sparse_top_k)
 
-        d_index = DenseIndex(
-            persist_dir=cfg.chroma_persist_dir,
-            model_name=cfg.embedding_model_name,
-        )
-    else:
-        d_index = dense_index
+    elif active_strategy == "dense_only":
+        d_index = _get_dense_index(dense_index, cfg)
+        return DenseRetriever(dense_index=d_index, top_k=cfg.dense_top_k)
 
-    if bm25_index is None:
-        from src.index.bm25_index import BM25Index
-
-        b_index = BM25Index()
-        if b_index.count() == 0 and cfg.raw_data_dir.exists():
-            from src.ingest.chunk import chunk_document
-            from src.ingest.parse import parse_directory
-
-            docs = parse_directory(cfg.raw_data_dir)
-            if docs:
-                corpus_chunks = []
-                for doc in docs:
-                    corpus_chunks.extend(
-                        chunk_document(doc, strategy=cfg.active_chunking_strategy)
-                    )
-                if corpus_chunks:
-                    b_index.index_chunks(corpus_chunks)
-                    col = d_index.get_collection(collection_name="rag_chunks")
-                    if col.count() == 0:
-                        d_index.index_chunks(corpus_chunks)
-    else:
-        b_index = bm25_index
-
-    dense_retriever = DenseRetriever(dense_index=d_index, top_k=cfg.dense_top_k)
-    bm25_retriever = BM25Retriever(bm25_index=b_index, top_k=cfg.sparse_top_k)
-
-    if active_strategy == "dense_only":
-        return dense_retriever
-    elif active_strategy == "bm25_only":
-        return bm25_retriever
     elif active_strategy == "hybrid":
+        b_index = _get_bm25_index(bm25_index, cfg)
+        d_index = _get_dense_index(dense_index, cfg)
+        dense_retriever = DenseRetriever(dense_index=d_index, top_k=cfg.dense_top_k)
+        bm25_retriever = BM25Retriever(bm25_index=b_index, top_k=cfg.sparse_top_k)
         return HybridRetriever(
             dense_retriever=dense_retriever,
             bm25_retriever=bm25_retriever,
@@ -182,7 +255,12 @@ def create_retriever(
             sparse_top_k=cfg.sparse_top_k,
             final_top_k=cfg.final_top_k,
         )
+
     elif active_strategy in ("hybrid_rerank", "hybrid_reranker"):
+        b_index = _get_bm25_index(bm25_index, cfg)
+        d_index = _get_dense_index(dense_index, cfg)
+        dense_retriever = DenseRetriever(dense_index=d_index, top_k=cfg.dense_top_k)
+        bm25_retriever = BM25Retriever(bm25_index=b_index, top_k=cfg.sparse_top_k)
         hybrid_base = HybridRetriever(
             dense_retriever=dense_retriever,
             bm25_retriever=bm25_retriever,
@@ -191,10 +269,10 @@ def create_retriever(
             sparse_top_k=cfg.sparse_top_k,
             final_top_k=cfg.candidate_top_k,
         )
+        rerank = _get_reranker(reranker, cfg)
         return RerankedRetriever(
             base_retriever=hybrid_base,
-            reranker=reranker
-            or CrossEncoderReranker(model_name=cfg.reranker_model_name),
+            reranker=rerank,
             candidate_top_k=cfg.candidate_top_k,
             final_top_k=cfg.final_top_k,
         )

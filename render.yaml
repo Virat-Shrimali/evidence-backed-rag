@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: evidence-backed-rag-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-backend.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: RETRIEVAL_STRATEGY
+        value: bm25_only
+      - key: LLM_PROVIDER
+        value: mock
