@@ -149,7 +149,8 @@ evidence-backed-rag/
     ├── test_retrieval.py          # Dense, sparse, and RRF unit tests
     ├── test_generation.py         # Citation schema and refusal unit tests
     ├── test_api.py                # FastAPI endpoint unit tests
-    └── test_deployment.py         # Container & deployment configuration tests
+    ├── test_deployment.py         # Container & deployment configuration tests
+    └── test_ui.py                 # Streamlit demo UI helper unit tests
 ```
 
 ---
@@ -184,7 +185,27 @@ pytest
 
 ---
 
-## 6. Containerization & Deployment (Hugging Face Docker Space)
+## 6. Streamlit Interactive Demo UI
+
+An interactive, recruiter-friendly presentation UI is provided in `app/streamlit_app.py` to visually demonstrate the core guarantees of the Evidence-Backed RAG system.
+
+### Launching the UI
+```bash
+streamlit run app/streamlit_app.py
+```
+
+### Key Capabilities Demonstrated
+1. **Verifiable Chunk Citations:** Every factual claim cites exact `[chunk_id]` identifiers with document name, page numbers, and verbatim highlighted quotations.
+2. **Deterministic Refusal:** Asking unanswerable questions demonstrates immediate, deterministic refusal without hallucination.
+3. **Multi-Strategy Comparison:** Interactively switch between **BM25-only**, **Dense-only**, **Hybrid (RRF)**, and **Hybrid + Cross-Encoder** to observe real-time ranking and latency differences.
+4. **Candidate Provenance Inspection:** Expandable retrieval details allow full audit of candidate chunks, similarity scores, and neural reranking outputs.
+
+### Architecture & Relationship to FastAPI
+Streamlit acts strictly as a presentation/demo layer. Both the Streamlit UI and the FastAPI REST service share the identical underlying `RAGPipeline` (`src/pipeline.py`). Business logic, retrieval fusion, reranking, and citation validation are not duplicated across services.
+
+---
+
+## 7. Containerization & Deployment (Hugging Face Docker Space)
 
 The application is containerized for production deployment, specifically targeting Hugging Face Docker Spaces or any standard Docker runtime.
 
@@ -245,7 +266,7 @@ docker run -p 7860:7860 \
 
 ---
 
-## 7. System Limitations & Production Considerations
+## 8. System Limitations & Production Considerations
 
 1. **Benchmark Scale:** The current golden QA dataset is an initial high-quality development benchmark (26 hand-crafted pairs). For enterprise deployments, this should be expanded to hundreds of representative domain questions with automated continuous evaluation in CI.
 2. **Inference Latency:** Neural cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) runs on CPU by default, requiring ~2.8s per query over 20 candidates. In high-throughput production environments, latency can be reduced to under 50ms using GPU inference, ONNX Runtime, or quantization (e.g., INT8/FP16).
@@ -254,7 +275,7 @@ docker run -p 7860:7860 \
 
 ---
 
-## 8. License
+## 9. License
 MIT License.
 
 
