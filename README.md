@@ -69,14 +69,19 @@ This system solves both problems by enforcing structured chunk-level citations (
 
 ## 3. Evaluation & Experimental Results
 
-The evaluation harness evaluates multiple retrieval strategies against a golden Q&A dataset with single-chunk, multi-chunk, and intentionally unanswerable questions:
+The evaluation harness evaluates multiple retrieval strategies against a version-controlled golden Q&A dataset containing single-chunk, multi-chunk, and intentionally unanswerable questions:
 
-| Retrieval Strategy | Recall@5 | Precision@5 | MRR | Faithfulness | Answer Correctness | Refusal Accuracy | p95 Latency |
-|---|---|---|---|---|---|---|---|
-| **BM25 Only** | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
-| **Dense Only (MiniLM)** | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
-| **Hybrid (Dense + BM25 RRF)** | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
-| **Hybrid + Reranker (Tier S)** | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* | *TBD* |
+| Retriever Strategy | Recall@5 | Precision@5 | MRR | Refusal Accuracy | p50 Latency (ms) | p95 Latency (ms) |
+|---|---|---|---|---|---|---|
+| **BM25-only** | 77.27% | 15.45% | 0.599 | 0.00% | 1.1 | 2.5 |
+| **Dense-only (all-MiniLM-L6-v2)** | 81.82% | 16.36% | 0.529 | 100.00% | 69.5 | 81.8 |
+| **Hybrid (Dense + BM25 RRF)** | 86.36% | 17.27% | 0.654 | 0.00% | 76.2 | 88.5 |
+| **Hybrid + Cross-Encoder (Tier S)** | **95.45%** | **19.09%** | **0.705** | **100.00%** | 2896.7 | 3211.1 |
+
+### Engineering Observations & Takeaways
+1. **Recall Progression:** Moving from BM25 (77.27%) to Dense (81.82%) to Hybrid RRF (86.36%) and finally Cross-Encoder reranking (95.45%) demonstrates a clear, monotonic improvement in retrieval recall. Fusing lexical exact-matching with dense semantic embeddings bridges vocabulary gaps.
+2. **Refusal Accuracy:** BM25 alone lacks a calibrated similarity threshold, matching tangential keywords for unanswerable queries (0% refusal). Dense embeddings and Cross-Encoder score distributions cleanly separate unanswerable queries, enabling 100% refusal accuracy via confidence thresholds.
+3. **Latency Trade-offs:** BM25 is blazing fast (<3ms), while dense vector retrieval completes in ~70ms. The cross-encoder adds ~2.8s CPU inference latency per query (top-20 candidates), providing maximum accuracy where precision and recall are mission-critical.
 
 *Detailed benchmark metrics, breakdown by question difficulty, and comparative analysis are generated dynamically in [evaluation/results/comparison_table.md](evaluation/results/comparison_table.md).*
 
@@ -240,6 +245,16 @@ docker run -p 7860:7860 \
 
 ---
 
-## 7. License
+## 7. System Limitations & Production Considerations
+
+1. **Benchmark Scale:** The current golden QA dataset is an initial high-quality development benchmark (26 hand-crafted pairs). For enterprise deployments, this should be expanded to hundreds of representative domain questions with automated continuous evaluation in CI.
+2. **Inference Latency:** Neural cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) runs on CPU by default, requiring ~2.8s per query over 20 candidates. In high-throughput production environments, latency can be reduced to under 50ms using GPU inference, ONNX Runtime, or quantization (e.g., INT8/FP16).
+3. **Document Formats:** Ingestion currently supports digital PDF and clean text documents. Scanned paper documents containing raster images require an additional OCR extraction step (e.g., Tesseract or cloud document AI).
+4. **Offline vs Live LLM Generation:** Offline automated testing and smoke verification use deterministic mock providers (`MockLLMProvider`) to ensure zero-cost, 100% reproducible tests. Production deployments require active provider credentials (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or local `ollama`).
+
+---
+
+## 8. License
 MIT License.
+
 
