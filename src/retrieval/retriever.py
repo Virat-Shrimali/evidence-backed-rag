@@ -1,14 +1,18 @@
 """Independent retriever abstractions for dense, sparse, hybrid, and reranked search."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from src.config import RAGConfig, settings
-from src.index.bm25_index import BM25Index
-from src.index.embed import DenseIndex
 from src.retrieval.hybrid import hybrid_retrieve
 from src.retrieval.models import RetrievedChunk
 from src.retrieval.rerank import CrossEncoderReranker
+
+if TYPE_CHECKING:
+    from src.index.bm25_index import BM25Index
+    from src.index.embed import DenseIndex
 
 
 class BaseRetriever(ABC):
@@ -120,8 +124,8 @@ def create_retriever(
     strategy: Literal["dense_only", "bm25_only", "hybrid", "hybrid_rerank"]
     | str
     | None = None,
-    dense_index: DenseIndex | None = None,
-    bm25_index: BM25Index | None = None,
+    dense_index: Any | None = None,
+    bm25_index: Any | None = None,
     reranker: CrossEncoderReranker | None = None,
     config: RAGConfig | None = None,
 ) -> BaseRetriever:
@@ -129,11 +133,22 @@ def create_retriever(
     cfg = config or settings
     active_strategy = strategy or cfg.retrieval_strategy
 
-    d_index = dense_index or DenseIndex(
-        persist_dir=cfg.chroma_persist_dir,
-        model_name=cfg.embedding_model_name,
-    )
-    b_index = bm25_index or BM25Index()
+    if dense_index is None:
+        from src.index.embed import DenseIndex
+
+        d_index = DenseIndex(
+            persist_dir=cfg.chroma_persist_dir,
+            model_name=cfg.embedding_model_name,
+        )
+    else:
+        d_index = dense_index
+
+    if bm25_index is None:
+        from src.index.bm25_index import BM25Index
+
+        b_index = BM25Index()
+    else:
+        b_index = bm25_index
 
     dense_retriever = DenseRetriever(dense_index=d_index, top_k=cfg.dense_top_k)
     bm25_retriever = BM25Retriever(bm25_index=b_index, top_k=cfg.sparse_top_k)
