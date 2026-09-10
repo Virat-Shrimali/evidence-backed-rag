@@ -23,12 +23,21 @@ def test_docker_and_deployment_files_exist():
     assert "USER user" in df_content, "Dockerfile must run as non-root user."
     assert "EXPOSE 7860" in df_content, "Dockerfile must expose port 7860 for HF Spaces."
     assert "uvicorn" in df_content, "Dockerfile must run uvicorn api.main:app."
+    assert "requirements-backend.txt" in df_content, "Dockerfile must install backend-specific requirements."
+    assert "HF_HOME" in df_content, "Dockerfile must set HF_HOME to writable cache."
 
     di_content = dockerignore.read_text(encoding="utf-8")
     assert ".git" in di_content
     assert ".venv" in di_content
     assert "chroma_db" in di_content
     assert ".env" in di_content
+
+    req_backend = base_dir / "requirements-backend.txt"
+    assert req_backend.exists(), "requirements-backend.txt must exist for lean container builds."
+    req_content = req_backend.read_text(encoding="utf-8")
+    assert "fastapi" in req_content
+    assert "streamlit" not in req_content, "Backend container must not install UI dependencies."
+    assert "ragas" not in req_content, "Backend container must not install evaluation harness dependencies."
 
 
 def test_rag_config_port_and_env_binding(monkeypatch):

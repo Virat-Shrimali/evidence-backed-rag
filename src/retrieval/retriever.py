@@ -147,6 +147,22 @@ def create_retriever(
         from src.index.bm25_index import BM25Index
 
         b_index = BM25Index()
+        if b_index.count() == 0 and cfg.raw_data_dir.exists():
+            from src.ingest.chunk import chunk_document
+            from src.ingest.parse import parse_directory
+
+            docs = parse_directory(cfg.raw_data_dir)
+            if docs:
+                corpus_chunks = []
+                for doc in docs:
+                    corpus_chunks.extend(
+                        chunk_document(doc, strategy=cfg.active_chunking_strategy)
+                    )
+                if corpus_chunks:
+                    b_index.index_chunks(corpus_chunks)
+                    col = d_index.get_collection(collection_name="rag_chunks")
+                    if col.count() == 0:
+                        d_index.index_chunks(corpus_chunks)
     else:
         b_index = bm25_index
 

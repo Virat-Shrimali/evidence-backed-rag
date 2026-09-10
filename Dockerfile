@@ -12,16 +12,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user with UID 1000 for Hugging Face Spaces compatibility
-RUN useradd -m -u 1000 user
+RUN useradd -m -u 1000 user && \
+    mkdir -p /home/user/.cache && \
+    chown -R user:user /home/user
 
 WORKDIR /app
 
 # Upgrade build tools
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install production dependencies with layer caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install backend production dependencies with layer caching
+COPY requirements-backend.txt .
+RUN pip install --no-cache-dir -r requirements-backend.txt
 
 # Copy application source code with user ownership
 COPY --chown=user:user . .
@@ -29,8 +31,10 @@ COPY --chown=user:user . .
 # Switch to non-root user
 USER user
 
-# Configure environment path for user
+# Configure environment path and cache directories for non-root user
 ENV HOME=/home/user \
+    HF_HOME=/home/user/.cache/huggingface \
+    TORCH_HOME=/home/user/.cache/torch \
     PATH=/home/user/.local/bin:$PATH
 
 EXPOSE 7860
