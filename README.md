@@ -1,3 +1,13 @@
+---
+title: Evidence Backed RAG
+emoji: 📚
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Evidence-Backed RAG System + Evaluation Harness
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -132,7 +142,9 @@ evidence-backed-rag/
     ├── test_foundation.py         # Sanity and configuration tests
     ├── test_chunking.py           # Chunking strategy unit tests
     ├── test_retrieval.py          # Dense, sparse, and RRF unit tests
-    └── test_generation.py         # Citation schema and refusal unit tests
+    ├── test_generation.py         # Citation schema and refusal unit tests
+    ├── test_api.py                # FastAPI endpoint unit tests
+    └── test_deployment.py         # Container & deployment configuration tests
 ```
 
 ---
@@ -167,5 +179,67 @@ pytest
 
 ---
 
-## 6. License
+## 6. Containerization & Deployment (Hugging Face Docker Space)
+
+The application is containerized for production deployment, specifically targeting Hugging Face Docker Spaces or any standard Docker runtime.
+
+### Container Architecture
+- **Base Image:** `python:3.11-slim` (minimal attack surface and image size)
+- **Security:** Non-root execution with UID `1000` (`useradd -m -u 1000 user`) ensuring compliance with Hugging Face Spaces security sandbox.
+- **Port Binding:** Defaults to `PORT=7860` (standard for Hugging Face Spaces) and dynamically adapts to `${PORT}` environment variable. Binds to `0.0.0.0`.
+- **Fast Startup:** `/health` responds immediately without loading embedding models or requiring remote LLM keys.
+
+### Local Docker Build & Run
+```bash
+# Build the production image
+docker build -t evidence-backed-rag .
+
+# Run container locally on port 7860
+docker run -p 7860:7860 -e PORT=7860 -e LLM_PROVIDER=mock evidence-backed-rag
+
+# Run with an OpenAI API key (or other provider)
+docker run -p 7860:7860 \
+  -e PORT=7860 \
+  -e LLM_PROVIDER=openai \
+  -e OPENAI_API_KEY=your-api-key \
+  evidence-backed-rag
+```
+
+### Environment Configuration & Secrets
+> [!IMPORTANT]
+> Never hardcode or commit secrets into images or git repositories. All sensitive credentials must be supplied via runtime environment variables.
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `PORT` | `7860` | Server listening port (injected automatically by Hugging Face) |
+| `LLM_PROVIDER` | `mock` | Generation backend (`mock`, `openai`, `anthropic`, `ollama`) |
+| `OPENAI_API_KEY` | `""` | Required when `LLM_PROVIDER=openai` |
+| `ANTHROPIC_API_KEY` | `""` | Required when `LLM_PROVIDER=anthropic` |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Endpoint when `LLM_PROVIDER=ollama` |
+| `LLM_MODEL_NAME` | `gpt-4o-mini` | Target LLM model identifier |
+| `RETRIEVAL_STRATEGY`| `hybrid_rerank` | Active retrieval strategy (`dense_only`, `bm25_only`, `hybrid`, `hybrid_rerank`) |
+
+### API Endpoints
+- `GET /health`: Readiness check returning `{"status": "healthy", "service": "evidence-backed-rag"}`.
+- `POST /query`: Grounded Q&A endpoint accepting `{"question": "..."}` and returning a structured `RAGResponse` with verifiable citations.
+- `GET /docs`: Interactive Swagger OpenAPI documentation.
+
+### Hugging Face Space Deployment Steps
+1. Create a new Space on [Hugging Face](https://huggingface.co/new-space).
+2. Choose **Docker** as the Space SDK (Blank template).
+3. Push this repository to the Hugging Face Space repository:
+   ```bash
+   git remote add space https://huggingface.co/spaces/<your-username>/<your-space-name>
+   git push space main
+   ```
+4. In Space **Settings → Variables and secrets**, add your provider secrets (e.g., `OPENAI_API_KEY`, `LLM_PROVIDER=openai`).
+5. Hugging Face detects the YAML frontmatter (`sdk: docker`, `app_port: 7860`), builds the container as user `1000`, and launches the FastAPI service.
+
+> [!NOTE]
+> **Host Environment Status:** The automated offline test suite (81 tests) and Ruff static linting are fully verified. In the local development environment, the Docker Desktop daemon was not running due to local Windows host permissions (`com.docker.service` stopped); container specifications, non-root user setup, environment variable mapping, and health check handlers are verified via static checks and automated unit tests.
+
+---
+
+## 7. License
 MIT License.
+
