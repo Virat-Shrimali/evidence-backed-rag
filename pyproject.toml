@@ -7,12 +7,18 @@ name = "evidence-backed-rag"
 version = "0.1.0"
 description = "Evidence-backed RAG system with verifiable chunk-level citations, refusal on insufficient evidence, and empirical evaluation harness"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11, <3.12"
 authors = [
     { name = "Virat Shrimali", email = "viratns05@gmail.com" }
 ]
 dependencies = [
+    "streamlit>=1.41.0,<2.0.0",
+    "httpx>=0.28.0,<1.0.0",
     "pydantic>=2.10.0,<3.0.0",
+]
+
+[project.optional-dependencies]
+backend = [
     "pydantic-settings>=2.7.0,<3.0.0",
     "python-dotenv>=1.0.1,<2.0.0",
     "tqdm>=4.66.0",
@@ -24,15 +30,11 @@ dependencies = [
     "chromadb>=0.5.23",
     "rank-bm25>=0.2.2",
     "openai>=1.59.0",
-    "httpx>=0.28.0",
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
     "python-multipart>=0.0.20",
-    "streamlit>=1.41.0",
     "ragas>=0.2.0",
 ]
-
-[project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
@@ -69,3 +71,6 @@ select = [
 ignore = [
     "E501", # line too long handled by formatter
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"app/streamlit_app.py" = ["E402"]

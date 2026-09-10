@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
@@ -35,12 +36,47 @@ def test_streamlit_app_imports_cleanly():
     assert hasattr(module, "get_selectable_strategies"), "streamlit_app must define get_selectable_strategies"
 
 
+def test_api_client_imports_cleanly():
+    """Verify that app.api_client can be imported cleanly without errors."""
+    module = importlib.import_module("app.api_client")
+    assert hasattr(module, "query_backend"), "api_client must expose query_backend"
+    assert hasattr(module, "get_backend_url"), "api_client must expose get_backend_url"
+    assert hasattr(module, "BackendClientError"), "api_client must expose BackendClientError"
+
+
 def test_frontend_does_not_instantiate_rag_pipeline():
     """Verify frontend modules do not instantiate or require RAGPipeline."""
-    # Ensure RAGPipeline is not imported or stored as a dependency of streamlit_app
+    import app.api_client as client_mod
     import app.streamlit_app as ui_mod
 
     assert not hasattr(ui_mod, "RAGPipeline"), "Streamlit frontend must not import or instantiate RAGPipeline"
+    assert not hasattr(client_mod, "RAGPipeline"), "API client must not import or instantiate RAGPipeline"
+
+
+def test_frontend_does_not_import_heavy_ml_libraries():
+    """Verify frontend and client modules do not import torch, sentence_transformers, or chromadb."""
+    import app.api_client as client_mod
+    import app.streamlit_app as ui_mod
+
+    for heavy_mod in ("torch", "sentence_transformers", "chromadb", "transformers"):
+        assert not hasattr(ui_mod, heavy_mod), f"streamlit_app must not import {heavy_mod}"
+        assert not hasattr(client_mod, heavy_mod), f"api_client must not import {heavy_mod}"
+
+
+def test_app_import_fallback_when_app_dir_in_syspath():
+    """Verify app/streamlit_app.py imports api_client robustly when executed directly in Streamlit."""
+    app_dir = str(Path(__file__).resolve().parent.parent / "app")
+
+    # Temporarily prepend app directory to sys.path to simulate Streamlit Community Cloud runner
+    original_path = list(sys.path)
+    try:
+        sys.path.insert(0, app_dir)
+        # Re-import to confirm robust resolution
+        import app.streamlit_app as re_ui_mod
+
+        assert hasattr(re_ui_mod, "main")
+    finally:
+        sys.path = original_path
 
 
 def test_strategy_options_completeness():

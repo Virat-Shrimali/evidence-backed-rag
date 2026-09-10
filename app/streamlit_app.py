@@ -8,10 +8,25 @@ from __future__ import annotations
 
 import os
 import re
+import sys
+from pathlib import Path
 
 import streamlit as st
 
-from app.api_client import BackendClientError, get_backend_url, query_backend
+# Ensure repository root is on sys.path when executed directly by Streamlit
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Robust import supporting both package-level and direct script execution
+try:
+    from app.api_client import BackendClientError, get_backend_url, query_backend
+except ModuleNotFoundError:
+    from api_client import (  # type: ignore[no-redef]
+        BackendClientError,
+        get_backend_url,
+        query_backend,
+    )
 
 STRATEGY_OPTIONS: dict[str, str] = {
     "Hybrid + Cross-Encoder (Tier S)": "hybrid_rerank",
