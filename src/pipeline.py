@@ -40,8 +40,9 @@ class RAGPipeline:
         - 'hybrid_rerank'
         """
         active_mode = retriever_mode or self.config.retrieval_strategy
-        retriever = self.retriever
-        if retriever is None or (retriever_mode is not None):
+        if self.retriever is not None:
+            retriever = self.retriever
+        else:
             retriever = create_retriever(strategy=active_mode, config=self.config)
 
         # 1. Retrieve ranked candidates
