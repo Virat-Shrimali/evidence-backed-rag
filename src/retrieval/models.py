@@ -15,3 +15,7 @@ class RetrievedChunk:
     retrieval_method: str  # "dense", "bm25", or "hybrid"
     page_numbers: list[int] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    rerank_score: float | None = None
+    rerank_rank: int | None = None
+    original_score: float | None = None
+    original_rank: int | None = None

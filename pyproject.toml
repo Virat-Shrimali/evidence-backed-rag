@@ -49,6 +49,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = [
+    "integration: marks integration tests requiring model loading",
+]
 
 [tool.ruff]
 line-length = 100
