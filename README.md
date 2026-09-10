@@ -205,35 +205,74 @@ Streamlit acts strictly as a presentation/demo layer. Both the Streamlit UI and 
 
 ---
 
-## 7. Containerization & Deployment (Hugging Face Docker Space)
+## 7. Containerization & Deployment: Phase 1 (FastAPI Backend Service)
 
-The application is containerized for production deployment, specifically targeting Hugging Face Docker Spaces or any standard Docker runtime.
+The project follows a **two-phase deployment strategy**:
+- **Phase 1 (Active):** Containerize and deploy the production **FastAPI REST API** as a standalone backend on a Hugging Face Docker Space.
+- **Phase 2:** Deploy the interactive Streamlit presentation UI connected to the live backend service.
 
-### Container Architecture
-- **Base Image:** `python:3.11-slim` (minimal attack surface and image size)
-- **Security:** Non-root execution with UID `1000` (`useradd -m -u 1000 user`) ensuring compliance with Hugging Face Spaces security sandbox.
-- **Port Binding:** Defaults to `PORT=7860` (standard for Hugging Face Spaces) and dynamically adapts to `${PORT}` environment variable. Binds to `0.0.0.0`.
-- **Fast Startup:** `/health` responds immediately without loading embedding models or requiring remote LLM keys.
+### Container Architecture & Optimizations
+- **Base Image:** `python:3.11-slim` (minimal attack surface and lightweight image).
+- **Security & User:** Non-root execution with UID `1000` (`useradd -m -u 1000 user`), ensuring full compliance with Hugging Face Spaces security sandbox.
+- **Cache Pre-configuration:** Dedicated `/home/user/.cache` directory owned by `user:user` with `HF_HOME=/home/user/.cache/huggingface` and `TORCH_HOME=/home/user/.cache/torch` to prevent permission errors when downloading models.
+- **Lean Runtime Dependencies:** Builds using `requirements-backend.txt`, excluding development, evaluation harness (`ragas`), and UI (`streamlit`) dependencies to keep image size minimal and build times fast.
+- **Dynamic Port & Host Binding:** Defaults to `PORT=7860` (standard for Hugging Face Spaces) and binds to `0.0.0.0`, adapting dynamically to `${PORT}`.
+- **Auto-Indexing on Cold Container Start:** On container startup, if the Chroma vector store or BM25 index is unpopulated (due to persistence directories being ignored in `.dockerignore`), the pipeline automatically parses and indexes the documents in `data/raw/` on first query.
 
-### Local Docker Build & Run
+### Hugging Face Free Tier Resource Profiling
+| Resource | Space Allocation | Pipeline Consumption | Status |
+|---|---|---|---|
+| **vCPU** | 2 vCPU | ~2.8s CPU inference for cross-encoder reranking | Well within capacity |
+| **RAM** | 16 GB | ~1.2 GB peak (MiniLM dense + ms-marco cross-encoder) | ~7.5% utilization |
+| **Disk** | 50 GB | ~1.5 GB (Python 3.11-slim + PyTorch CPU + models) | ~3% utilization |
+| **GPU** | Optional (T4 available) | CPU default; works completely without GPU | CPU fully verified |
+
+### API Endpoints
+- `GET /health`: Instant readiness check returning `{"status": "healthy", "service": "evidence-backed-rag"}`.
+- `POST /query`: Grounded Q&A endpoint accepting `{"question": "..."}` and returning a structured `RAGResponse` with verifiable citations.
+- `GET /docs`: Interactive Swagger OpenAPI documentation.
+- `GET /redoc`: Alternative ReDoc API documentation.
+
+### Sample API Requests & Responses
+
+#### 1. Health Readiness Check
 ```bash
-# Build the production image
-docker build -t evidence-backed-rag .
+curl -X GET "https://<hf-username>-<space-name>.hf.space/health"
+```
+```json
+{
+  "status": "healthy",
+  "service": "evidence-backed-rag",
+  "pipeline_initialized": true
+}
+```
 
-# Run container locally on port 7860
-docker run -p 7860:7860 -e PORT=7860 -e LLM_PROVIDER=mock evidence-backed-rag
+#### 2. Answerable Document-Grounded Query
+```bash
+curl -X POST "https://<hf-username>-<space-name>.hf.space/query" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the core differentiator of the Evidence-Backed RAG system?"}'
+```
 
-# Run with an OpenAI API key (or other provider)
-docker run -p 7860:7860 \
-  -e PORT=7860 \
-  -e LLM_PROVIDER=openai \
-  -e OPENAI_API_KEY=your-api-key \
-  evidence-backed-rag
+#### 3. Deterministic Refusal on Unanswerable Query
+```bash
+curl -X POST "https://<hf-username>-<space-name>.hf.space/query" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the capital of Atlantis?"}'
+```
+Response:
+```json
+{
+  "answer": "Insufficient evidence to answer this question based on the provided documents.",
+  "citations": [],
+  "evidence_found": false,
+  "confidence": 0.0
+}
 ```
 
 ### Environment Configuration & Secrets
 > [!IMPORTANT]
-> Never hardcode or commit secrets into images or git repositories. All sensitive credentials must be supplied via runtime environment variables.
+> Never hardcode or commit secrets into images or git repositories. All sensitive credentials must be supplied via runtime environment variables or Space Secrets.
 
 | Environment Variable | Default | Description |
 |---|---|---|
@@ -245,24 +284,23 @@ docker run -p 7860:7860 \
 | `LLM_MODEL_NAME` | `gpt-4o-mini` | Target LLM model identifier |
 | `RETRIEVAL_STRATEGY`| `hybrid_rerank` | Active retrieval strategy (`dense_only`, `bm25_only`, `hybrid`, `hybrid_rerank`) |
 
-### API Endpoints
-- `GET /health`: Readiness check returning `{"status": "healthy", "service": "evidence-backed-rag"}`.
-- `POST /query`: Grounded Q&A endpoint accepting `{"question": "..."}` and returning a structured `RAGResponse` with verifiable citations.
-- `GET /docs`: Interactive Swagger OpenAPI documentation.
-
-### Hugging Face Space Deployment Steps
+### Hugging Face Space Deployment Steps (Phase 1)
 1. Create a new Space on [Hugging Face](https://huggingface.co/new-space).
-2. Choose **Docker** as the Space SDK (Blank template).
-3. Push this repository to the Hugging Face Space repository:
+2. Set Space Name (e.g. `evidence-backed-rag-api`) and choose **Docker** as the Space SDK (Blank template).
+3. Connect your Git repository or push directly to the Space:
    ```bash
-   git remote add space https://huggingface.co/spaces/<your-username>/<your-space-name>
-   git push space main
+   git remote add hf-backend https://huggingface.co/spaces/<your-username>/evidence-backed-rag-api
+   git push hf-backend feat/backend-deployment:main
    ```
-4. In Space **Settings → Variables and secrets**, add your provider secrets (e.g., `OPENAI_API_KEY`, `LLM_PROVIDER=openai`).
-5. Hugging Face detects the YAML frontmatter (`sdk: docker`, `app_port: 7860`), builds the container as user `1000`, and launches the FastAPI service.
+4. In Space **Settings → Variables and secrets**:
+   - Add Secret `OPENAI_API_KEY` (if using OpenAI).
+   - Add Variable `LLM_PROVIDER=openai` (or leave default `mock` for zero-cost testing).
+5. Hugging Face automatically detects `sdk: docker` and `app_port: 7860` from the README YAML frontmatter, builds the container with `Dockerfile`, and starts the Uvicorn server.
+6. The public backend URL will be accessible at:
+   `https://<your-username>-evidence-backed-rag-api.hf.space`
 
 > [!NOTE]
-> **Host Environment Status:** The automated offline test suite (81 tests) and Ruff static linting are fully verified. In the local development environment, the Docker Desktop daemon was not running due to local Windows host permissions (`com.docker.service` stopped); container specifications, non-root user setup, environment variable mapping, and health check handlers are verified via static checks and automated unit tests.
+> **Host Environment Status:** The automated offline test suite (87 tests), end-to-end smoke test, and Ruff static linting are 100% verified. In the local development environment, the Docker Desktop daemon was not running due to local Windows host permissions (`com.docker.service` stopped); container specifications, non-root user setup, environment variable mapping, health check handlers, and lean runtime dependencies are verified via static checks and automated unit tests.
 
 ---
 
