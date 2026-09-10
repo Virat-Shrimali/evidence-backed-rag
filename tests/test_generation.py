@@ -327,6 +327,65 @@ def test_rag_pipeline_end_to_end(sample_retrieved_chunks):
     assert response.citations[0].chunk_id == "doc1#stratA#c0001"
 
 
+def test_mock_llm_provider_does_not_refuse_when_context_contains_unanswerable():
+    """Verify MockLLMProvider does not trigger false refusal when context mentions 'unanswerable'."""
+    chunks_with_unanswerable = [
+        RetrievedChunk(
+            chunk_id="chunk_eval_guide",
+            document_id="doc_guide",
+            content="Include a few unanswerable questions in your evaluation dataset to test refusal accuracy.",
+            score=0.9,
+            rank=1,
+            retrieval_method="bm25",
+        ),
+        RetrievedChunk(
+            chunk_id="chunk_metric_data",
+            document_id="doc_guide",
+            content="Operating margin increased by 4.2% across business units in FY2023.",
+            score=0.85,
+            rank=2,
+            retrieval_method="bm25",
+        ),
+    ]
+    generator = EvidenceGroundedGenerator(provider=MockLLMProvider())
+    response = generator.generate("What was the operating margin increase?", retrieved_chunks=chunks_with_unanswerable)
+
+    assert response.sufficient_evidence is True
+    assert response.answer != INSUFFICIENT_EVIDENCE_REFUSAL
+    assert len(response.citations) == 1
+    assert response.citations[0].chunk_id in ("chunk_eval_guide", "chunk_metric_data")
+
+
+def test_mock_llm_provider_refuses_when_question_is_unanswerable(sample_retrieved_chunks):
+    """Verify MockLLMProvider deterministically refuses when the question itself triggers refusal."""
+    generator = EvidenceGroundedGenerator(provider=MockLLMProvider())
+
+    for unanswerable_q in [
+        "Explain the unanswerable details of this proposal.",
+        "How do I set up a redis caching layer?",
+        "What is the elasticsearch cluster topology?",
+        "Where is the postgresql connection configured?",
+    ]:
+        response = generator.generate(unanswerable_q, retrieved_chunks=sample_retrieved_chunks)
+        assert response.sufficient_evidence is False
+        assert response.answer == INSUFFICIENT_EVIDENCE_REFUSAL
+        assert response.citations == []
+
+
+def test_bm25_only_query_retrieves_and_cites_embedding_model():
+    """Verify test query 'What embedding model does the project use?' succeeds with bm25_only and cites the embedding model."""
+    generator = EvidenceGroundedGenerator(provider=MockLLMProvider())
+    pipeline = RAGPipeline(generator=generator)
+
+    response = pipeline.query("What embedding model does the project use?", retriever_mode="bm25_only")
+    assert response.sufficient_evidence is True
+    assert response.answer != INSUFFICIENT_EVIDENCE_REFUSAL
+    assert len(response.citations) >= 1
+
+    cited_text = " ".join(c.text_snippet for c in response.citations)
+    assert any(term in cited_text.lower() or term in response.answer.lower() for term in ["minilm", "sentence-transformers"])
+
+
 @pytest.mark.integration
 def test_real_llm_provider_integration():
     """Optional integration test with real OpenAI or Ollama provider if configured in environment."""
@@ -337,4 +396,5 @@ def test_real_llm_provider_integration():
     provider = OpenAILLMProvider(api_key=api_key)
     raw = provider.generate_raw("Return JSON with answer: 'pong'", "You must respond in JSON format.")
     assert "pong" in raw.lower()
+
 

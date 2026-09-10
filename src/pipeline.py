@@ -66,9 +66,18 @@ class RAGPipeline:
     ) -> tuple[RAGResponse, list[RetrievedChunk]]:
         """Execute RAG query and return both structured response and ranked candidate chunks."""
         retriever = self.get_retriever(retriever_mode)
+        active_mode = retriever_mode or self.config.retrieval_strategy
+
+        # For bm25_only retrieval in the pipeline, ensure the candidate pool
+        # provided to generation receives the configured sparse_top_k so that
+        # valid evidence beyond the top few keyword matches is visible.
+        if active_mode == "bm25_only":
+            retrieve_k = max(top_k or 0, self.config.sparse_top_k)
+        else:
+            retrieve_k = top_k
 
         # 1. Retrieve ranked candidates
-        candidates = retriever.retrieve(question, top_k=top_k)
+        candidates = retriever.retrieve(question, top_k=retrieve_k)
 
         # 2. Evidence-grounded generation with citation validation & refusal
         response = self.generator.generate(question, retrieved_chunks=candidates)
