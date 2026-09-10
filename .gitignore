@@ -43,6 +43,8 @@ faiss_index/
 # Data artifacts (keep folder structure and golden QA files, ignore large raw/processed files)
 data/raw/*
 !data/raw/.gitkeep
+!data/raw/*.md
+!data/raw/*.txt
 data/processed/*
 !data/processed/.gitkeep
 
