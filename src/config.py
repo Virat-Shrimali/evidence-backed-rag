@@ -15,13 +15,16 @@ INSUFFICIENT_EVIDENCE_REFUSAL = (
 
 class ChunkingConfig(BaseSettings):
     """Configuration for chunking strategies."""
-    # Strategy A: Baseline Fixed-Size Chunking
+    tokenizer_encoding: str = "cl100k_base"
+
+    # Strategy A: Baseline Fixed-Size Token Chunking
     strategy_a_chunk_size: int = 500
     strategy_a_chunk_overlap: int = 50
 
-    # Strategy B: Fine-Grained / Smaller Chunking
+    # Strategy B: Fine-Grained 200-Token Chunking with Sentence-Boundary Preservation
     strategy_b_chunk_size: int = 200
     strategy_b_chunk_overlap: int = 20
+    strategy_b_preserve_sentences: bool = True
 
 
 class RAGConfig(BaseSettings):
